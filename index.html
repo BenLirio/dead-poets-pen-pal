@@ -28,8 +28,9 @@
       <section id="intro" class="screen">
         <p class="lede">
           Somewhere in the candle-smoke of the archives, a letter-writer has been waiting
-          on you. Whisper your full name. We will rifle through the registry, ask you
-          a few intimate questions, and find your epistolary twin.
+          on you. Whisper your full name. We will rifle through the registry, read the
+          notes the archive keeps on it, ask you a few intimate questions, and find
+          your epistolary twin.
         </p>
         <button id="begin" class="ink-button">Begin the correspondence</button>
       </section>
@@ -45,6 +46,34 @@
           placeholder="Eleanor Whitfield" autocomplete="name" spellcheck="false" />
         <button id="register-name" class="ink-button">Consult the archive</button>
         <div id="name-error" class="err-msg" hidden></div>
+      </section>
+
+      <!-- Dossier screen (visible name-lookup step) -->
+      <section id="dossier" class="screen" hidden>
+        <div class="progress">From the archive's drawer on <span id="dossier-name"></span></div>
+
+        <div class="dossier-card">
+          <div class="dossier-stamp" aria-hidden="true">ARCHIVE<br>NOTES</div>
+
+          <div class="dossier-row">
+            <div class="dossier-label">Origin</div>
+            <p id="dossier-origin" class="dossier-text"></p>
+          </div>
+
+          <div class="dossier-row">
+            <div class="dossier-label">Era &amp; feel</div>
+            <p id="dossier-era" class="dossier-text"></p>
+          </div>
+
+          <div class="dossier-row">
+            <div class="dossier-label">Filed beside</div>
+            <ul id="dossier-bearers" class="dossier-list"></ul>
+          </div>
+
+          <p id="dossier-ink" class="dossier-ink"></p>
+        </div>
+
+        <button id="dossier-continue" class="ink-button">Continue &mdash; three intimate queries</button>
       </section>
 
       <!-- Follow-ups screen -->
@@ -79,6 +108,14 @@
           <div class="letter-body" id="letter-body"></div>
           <div class="letter-signature" id="letter-signature"></div>
         </article>
+
+        <aside id="result-dossier" class="result-dossier" hidden>
+          <div class="result-dossier-head">
+            <span class="result-dossier-pin" aria-hidden="true"></span>
+            <span class="result-dossier-title">From the archive's drawer</span>
+          </div>
+          <div id="result-dossier-body" class="result-dossier-body"></div>
+        </aside>
 
         <div id="share" class="share-row" style="display:none">
           <button onclick="share()" class="ink-button share-btn">Share your letter</button>

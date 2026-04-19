@@ -1,7 +1,13 @@
-// Dead Poets' Pen Pal — AI-driven personalization: name -> follow-ups -> letter.
-// The AI uses its own knowledge of the given name (common associations, famous bearers,
-// linguistic/cultural roots) to generate personalized follow-up questions and a letter
-// in the voice of a historical correspondent. Deterministic fallbacks on every AI call.
+// Dead Poets' Pen Pal — AI-driven personalization: name -> archive dossier -> follow-ups -> letter.
+//
+// The app now runs a VISIBLE archive-lookup step: after the user gives their name,
+// the AI produces a short "dossier" on the name (origin, era-feel, common
+// associations, notable bearers) which is shown on its own screen before the
+// follow-up questions. This proves to the user that the archive actually
+// "looked them up" — previously this step was silent and the personalization
+// felt invisible. The dossier is also fed back into the follow-up and letter
+// stages so the personalization stays grounded in the same findings the user
+// saw.
 
 const AI_ENDPOINT = 'https://uy3l6suz07.execute-api.us-east-1.amazonaws.com/ai';
 const MODEL = 'gpt-5.4-mini';
@@ -122,14 +128,28 @@ function pickArchetypeByKey(key, fallbackSeed) {
   return ARCHETYPES[(fallbackSeed || 0) % ARCHETYPES.length];
 }
 
-// ------- deterministic fallback follow-up questions (if AI fails on stage 1) -------
+// ------- deterministic fallback dossier -------
+function fallbackDossier(fullName) {
+  const first = String(fullName || '').trim().split(/\s+/)[0] || 'friend';
+  return {
+    origin: `The archive finds the name "${first}" in more than one drawer — it has wandered between tongues and centuries, and no single desk claims it.`,
+    era_feel: 'Reads like a name you would find on the spine of a slim, well-handled volume — a personal library, not a lending one.',
+    bearers: [
+      'a name that recurs in letters between friends more than on official registers',
+      'used warmly by people who meant it, which is rarer than it sounds',
+    ],
+    ink_note: 'Filed under "names the archive has been fond of without quite knowing why."',
+  };
+}
+
+// ------- deterministic fallback follow-up questions (if AI fails on stage 2) -------
 const FALLBACK_FOLLOWUPS = [
   'What is a room you have loved and left?',
   'What did you secretly want that you are almost willing to admit now?',
   'Who are you writing to, really, when no one is watching?',
 ];
 
-const FALLBACK_PREAMBLE = 'The archive cannot find your exact file — but the shelf it would have been on is warm. A few intimate queries, and we will do the rest.';
+const FALLBACK_PREAMBLE = 'The archive has turned up the notes above. A few intimate queries to seal the match, and we will do the rest.';
 
 // ------- deterministic fallback letter -------
 const FALLBACK_LETTER =
@@ -139,7 +159,8 @@ const FALLBACK_LETTER =
   `Write again when the tide is right. I will be here, pretending to read.`;
 
 // ------- URL-fragment sharing -------
-// v2 payload: { v:2, n: full_name, qs: [strings], as: [strings], k: archetype_key, sal: string, ltr: string }
+// v3 payload: { v:3, n: full_name, dos: dossier_obj, qs: [strings], as: [strings],
+//               k: archetype_key, sal: string, ltr: string }
 function encodeState(payload) {
   const json = JSON.stringify(payload);
   const b64 = btoa(unescape(encodeURIComponent(json)))
@@ -154,7 +175,7 @@ function decodeState(frag) {
     const json = decodeURIComponent(escape(atob(b64)));
     const obj = JSON.parse(json);
     if (!obj || typeof obj !== 'object') return null;
-    if (obj.v !== 2) return null;
+    if (obj.v !== 3 && obj.v !== 2) return null; // v2 still readable for old links
     if (typeof obj.n !== 'string') return null;
     if (!Array.isArray(obj.qs) || !Array.isArray(obj.as)) return null;
     if (typeof obj.ltr !== 'string') return null;
@@ -165,6 +186,7 @@ function decodeState(frag) {
 // ------- state -------
 const state = {
   name: '',
+  dossier: null,   // { origin, era_feel, bearers: string[], ink_note }
   questions: [],   // 3 strings (from AI or fallback)
   answers: [],     // parallel array of user responses
   archetypeKey: '',
@@ -180,6 +202,13 @@ const el = {
   nameInput: document.getElementById('name-input'),
   registerName: document.getElementById('register-name'),
   nameError: document.getElementById('name-error'),
+  dossier: document.getElementById('dossier'),
+  dossierName: document.getElementById('dossier-name'),
+  dossierOrigin: document.getElementById('dossier-origin'),
+  dossierEra: document.getElementById('dossier-era'),
+  dossierBearers: document.getElementById('dossier-bearers'),
+  dossierInk: document.getElementById('dossier-ink'),
+  dossierContinue: document.getElementById('dossier-continue'),
   followups: document.getElementById('followups'),
   fuPreamble: document.getElementById('fu-preamble'),
   fuList: document.getElementById('fu-list'),
@@ -193,13 +222,15 @@ const el = {
   letterSalutation: document.getElementById('letter-salutation'),
   letterBody: document.getElementById('letter-body'),
   letterSignature: document.getElementById('letter-signature'),
+  resultDossier: document.getElementById('result-dossier'),
+  resultDossierBody: document.getElementById('result-dossier-body'),
   share: document.getElementById('share'),
   restart: document.getElementById('restart'),
 };
 
 // ------- rendering -------
 function showScreen(name) {
-  const screens = ['intro', 'nameScreen', 'followups', 'loading', 'result'];
+  const screens = ['intro', 'nameScreen', 'dossier', 'followups', 'loading', 'result'];
   screens.forEach(s => {
     const node = el[s];
     if (!node) return;
@@ -221,6 +252,25 @@ function escapeHtml(s) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+}
+
+function renderDossier(fullName, dossier) {
+  const first = String(fullName || '').trim().split(/\s+/)[0] || 'friend';
+  if (el.dossierName) el.dossierName.textContent = first;
+  if (el.dossierOrigin) el.dossierOrigin.textContent = dossier.origin || '';
+  if (el.dossierEra) el.dossierEra.textContent = dossier.era_feel || '';
+
+  if (el.dossierBearers) {
+    el.dossierBearers.innerHTML = '';
+    const bearers = Array.isArray(dossier.bearers) ? dossier.bearers : [];
+    bearers.slice(0, 4).forEach(b => {
+      const li = document.createElement('li');
+      li.textContent = String(b || '').trim();
+      if (li.textContent) el.dossierBearers.appendChild(li);
+    });
+  }
+
+  if (el.dossierInk) el.dossierInk.textContent = dossier.ink_note || '';
 }
 
 function renderFollowups(preamble, questions) {
@@ -261,7 +311,9 @@ const LOADING_MESSAGES = [
 ];
 const ARCHIVE_MESSAGES = [
   'Rifling the registry for your name…',
+  'Pulling the drawer marked with your initial…',
   'Consulting the index of forgotten correspondents…',
+  'Cross-referencing the name against three centuries of ink…',
   'Lighting a second candle — the archive is dusty…',
 ];
 
@@ -270,21 +322,78 @@ function pickLoadingMessage(seed, from) {
   return pool[hash(String(seed || '')) % pool.length];
 }
 
-// ------- AI call: stage 1 — follow-up questions informed by the name -------
-async function generateFollowups(fullName) {
+// ------- AI call: stage 1 — archive dossier on the name (VISIBLE lookup) -------
+async function generateDossier(fullName) {
   const systemPrompt = [
-    `You are the intake archivist for a curated 19th/early-20th-century letter-correspondence service called "Dead Poets' Pen Pal".`,
-    `The user has just given you a full name. Using whatever you know about that name — its cultural/linguistic roots, famous bearers across history, common associations, the kind of person who tends to carry it — draft three short, intimate follow-up questions that would personalize a handwritten letter addressed to this specific person.`,
-    `The questions should feel warmly specific to the name (draw on associations) without being generic biographical prompts and without claiming facts about the actual user.`,
-    `Also write a one-sentence "preamble" that gently acknowledges the name and invites them to answer.`,
-    `Do NOT address the user as a celebrity even if the name matches one. The name is a hook for personalization, not a claim of identity.`,
-    `Tone: the app's aesthetic is parchment, iron-gall ink, Victorian correspondence. Questions should sound like a thoughtful stranger across a candlelit desk — not a therapist, not a personality quiz. Short. Sentence-length. No multiple-choice.`,
-    `Return strict JSON ONLY, matching exactly this schema:`,
-    `{"preamble": string, "questions": [string, string, string]}`,
+    `You are the archivist for "Dead Poets' Pen Pal", a curated 19th/early-20th-century letter-correspondence service.`,
+    `A visitor has just given you a full name. Using your own knowledge of that name — its linguistic roots, etymology, era-feel, notable bearers in history and literature, and the kind of person who tends to carry it — produce a short ARCHIVE DOSSIER that will be shown to the visitor before the letter is written.`,
+    `The dossier must feel like a real archivist flipping through a drawer — grounded, specific, lightly poetic, warm. Do NOT address the visitor as if they are any of the notable bearers; the name is a hook for personalization, not a claim of identity.`,
+    `Fields (all mandatory):`,
+    `- "origin": 1-2 sentences on the name's linguistic/cultural roots (where it comes from, what it originally meant). Can be approximate if the name is ambiguous — say so gracefully.`,
+    `- "era_feel": 1 sentence on what era/setting/texture the name evokes (e.g. "reads like gaslight and ledger-paper", "feels like a name carried across ship-decks").`,
+    `- "bearers": an array of 2-3 SHORT lines, each naming a notable real historical bearer of the name (or a type of person it is associated with if no famous bearer is obvious) and a one-phrase characterization. Example: "Eleanor of Aquitaine — queen of two kingdoms and a thousand complaints." If nothing famous exists, give character-types instead ("carried by midwives, map-clerks, and people who make bread at 4am").`,
+    `- "ink_note": 1 sentence, lyrical, as if the archivist wrote a small aside in the margin of the file.`,
+    `Tone: parchment, iron-gall ink, thoughtful stranger across a candlelit desk. Period-leaning but readable. No modern slang, no emojis, no markdown.`,
+    `Return strict JSON ONLY matching exactly:`,
+    `{"origin": string, "era_feel": string, "bearers": [string, string, string?], "ink_note": string}`,
     `No markdown, no code fences, no explanation — JSON only.`,
   ].join(' ');
 
   const userPrompt = JSON.stringify({ full_name: fullName });
+
+  try {
+    const res = await fetch(AI_ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        slug: SLUG,
+        model: MODEL,
+        temperature: 0.75,
+        max_tokens: 420,
+        response_format: 'json_object',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user',   content: userPrompt },
+        ],
+      }),
+    });
+    if (!res.ok) throw new Error('http_' + res.status);
+    const data = await res.json();
+    const raw = (data && typeof data.content === 'string') ? data.content.trim() : '';
+    if (!raw) throw new Error('empty');
+
+    const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+    const parsed = JSON.parse(cleaned);
+
+    if (!parsed || typeof parsed !== 'object') throw new Error('bad_obj');
+    const origin = String(parsed.origin || '').trim();
+    const era_feel = String(parsed.era_feel || '').trim();
+    const bearers = Array.isArray(parsed.bearers)
+      ? parsed.bearers.map(b => String(b || '').trim()).filter(Boolean).slice(0, 3)
+      : [];
+    const ink_note = String(parsed.ink_note || '').trim();
+
+    if (!origin || !era_feel || bearers.length < 1) throw new Error('missing_fields');
+
+    return { origin, era_feel, bearers, ink_note: ink_note || '' };
+  } catch (_) {
+    return fallbackDossier(fullName);
+  }
+}
+
+// ------- AI call: stage 2 — follow-up questions informed by the dossier -------
+async function generateFollowups(fullName, dossier) {
+  const systemPrompt = [
+    `You are the intake archivist for "Dead Poets' Pen Pal". The archive has just produced a dossier on this visitor's name (provided below). The visitor has SEEN this dossier.`,
+    `Draft three short, intimate follow-up questions that would personalize a handwritten letter to them. At least one question should subtly echo a detail from the dossier (era-feel, an association, a bearer's territory) without quoting it verbatim and without assuming the visitor is a famous bearer.`,
+    `Also write a ONE-sentence "preamble" that picks up where the dossier left off and invites them to answer — something like "The archive has pulled its notes. Three queries to seal the match —".`,
+    `Tone: parchment, iron-gall ink, thoughtful stranger across a candlelit desk. Short. Sentence-length. No multiple-choice. No therapist language.`,
+    `Return strict JSON ONLY matching exactly:`,
+    `{"preamble": string, "questions": [string, string, string]}`,
+    `No markdown, no code fences, no explanation — JSON only.`,
+  ].join(' ');
+
+  const userPrompt = JSON.stringify({ full_name: fullName, dossier: dossier });
 
   try {
     const res = await fetch(AI_ENDPOINT, {
@@ -307,7 +416,6 @@ async function generateFollowups(fullName) {
     const raw = (data && typeof data.content === 'string') ? data.content.trim() : '';
     if (!raw) throw new Error('empty');
 
-    // Strip accidental code fences if model wraps them.
     const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
     const parsed = JSON.parse(cleaned);
 
@@ -325,19 +433,19 @@ async function generateFollowups(fullName) {
   }
 }
 
-// ------- AI call: stage 2 — letter itself (with archetype pick) -------
-async function generateLetter(fullName, questions, answers) {
+// ------- AI call: stage 3 — letter itself (with archetype pick) -------
+async function generateLetter(fullName, dossier, questions, answers) {
   const qa = questions.map((q, i) => ({ q, a: String(answers[i] || '').slice(0, 400) }));
 
   const allowed = ARCHETYPES.map(a => `- ${a.key}: ${a.name} — ${a.voice}`).join('\n');
 
   const systemPrompt = [
     `You are the scrivener for "Dead Poets' Pen Pal". You draft short, handwritten-style letters.`,
-    `Task: given the recipient's full name and their answers to three intimate queries, (1) pick the ONE historical letter-writer archetype below whose voice best fits them, then (2) compose a personalized letter in that archetype's voice.`,
-    `The letter MUST feel written TO this specific person: open with a handwritten-style salutation that uses their first name (e.g. "Dear Eleanor —" or "My dear Eleanor,"). Weave in at least two specific details from their answers by image or phrasing — not quoting verbatim. You may gently draw on warm, common associations of the name (linguistic roots, era, feel) without claiming facts about the actual user.`,
+    `Task: given the recipient's full name, the archive's dossier on the name, and the recipient's answers to three intimate queries, (1) pick the ONE historical letter-writer archetype below whose voice best fits them (use both dossier era-feel AND the answers to decide), then (2) compose a personalized letter in that archetype's voice.`,
+    `The letter MUST feel written TO this specific person: open with a handwritten-style salutation that uses their first name (e.g. "Dear Eleanor —" or "My dear Eleanor,"). Weave in at least two specific details from their ANSWERS (image or phrasing, not verbatim quotes) AND at least one echo from the DOSSIER (era-feel, origin root, or a bearer's territory) so it is clear the letter was shaped by the archive's findings — NOT claiming the user is a famous bearer.`,
     `Length: 3 short paragraphs in the letter body (NOT counting the salutation). 100 to 160 words total in the body. No lists, no headings, no hashtags, no emojis.`,
     `Do NOT include a sign-off or signature in the body (it will be appended separately).`,
-    `Stay in period-appropriate diction for the archetype. No modern slang. No references to AI, apps, websites, or the questionnaire.`,
+    `Stay in period-appropriate diction for the archetype. No modern slang. No references to AI, apps, websites, the dossier-as-dossier, or the questionnaire.`,
     `Allowed archetype keys (pick EXACTLY one, exact key spelling):`,
     allowed,
     `Return strict JSON ONLY, schema:`,
@@ -345,7 +453,7 @@ async function generateLetter(fullName, questions, answers) {
     `"salutation" is just the opening line (e.g. "Dear Eleanor —"). "letter" is the 3 paragraphs of body text, separated by blank lines. No markdown. No code fences. JSON only.`,
   ].join('\n');
 
-  const userPrompt = JSON.stringify({ full_name: fullName, follow_ups: qa });
+  const userPrompt = JSON.stringify({ full_name: fullName, dossier: dossier, follow_ups: qa });
 
   try {
     const res = await fetch(AI_ENDPOINT, {
@@ -397,12 +505,25 @@ function defaultSalutation(fullName) {
 }
 
 // ------- result flow -------
-async function runFollowupStage() {
+async function runDossierStage() {
   el.loadingMsg.textContent = pickLoadingMessage(state.name, ARCHIVE_MESSAGES);
   showScreen('loading');
 
-  const minLoad = new Promise(r => setTimeout(r, 900));
-  const fuP = generateFollowups(state.name);
+  const minLoad = new Promise(r => setTimeout(r, 1100));
+  const dosP = generateDossier(state.name);
+  const [_, dossier] = await Promise.all([minLoad, dosP]);
+
+  state.dossier = dossier;
+  renderDossier(state.name, dossier);
+  showScreen('dossier');
+}
+
+async function runFollowupStage() {
+  el.loadingMsg.textContent = pickLoadingMessage(state.name + '|fu', LOADING_MESSAGES);
+  showScreen('loading');
+
+  const minLoad = new Promise(r => setTimeout(r, 700));
+  const fuP = generateFollowups(state.name, state.dossier || fallbackDossier(state.name));
   const [_, { preamble, questions }] = await Promise.all([minLoad, fuP]);
 
   state.questions = questions;
@@ -417,7 +538,12 @@ async function runLetterStage() {
   showScreen('loading');
 
   const minLoad = new Promise(r => setTimeout(r, 900));
-  const letterP = generateLetter(state.name, state.questions, state.answers);
+  const letterP = generateLetter(
+    state.name,
+    state.dossier || fallbackDossier(state.name),
+    state.questions,
+    state.answers
+  );
   const [_, out] = await Promise.all([minLoad, letterP]);
 
   state.archetypeKey = out.archetypeKey;
@@ -445,15 +571,65 @@ function renderResult() {
   });
   el.letterSignature.textContent = archetype.signoff;
 
+  // Render the archive dossier footer under the letter so the lookup is visible
+  // on the result screen too — this is the "receipt" for the personalization.
+  renderResultDossierFooter();
+
   el.share.style.display = 'block';
   showScreen('result');
+}
+
+function renderResultDossierFooter() {
+  if (!el.resultDossier || !el.resultDossierBody) return;
+  const d = state.dossier;
+  if (!d) {
+    el.resultDossier.hidden = true;
+    return;
+  }
+  el.resultDossier.hidden = false;
+  el.resultDossierBody.innerHTML = '';
+
+  const first = String(state.name || '').trim().split(/\s+/)[0] || 'friend';
+
+  const origin = document.createElement('p');
+  origin.innerHTML = `<em>On the name &ldquo;${escapeHtml(first)}&rdquo; —</em> ${escapeHtml(d.origin || '')}`;
+  el.resultDossierBody.appendChild(origin);
+
+  if (d.era_feel) {
+    const era = document.createElement('p');
+    era.textContent = d.era_feel;
+    el.resultDossierBody.appendChild(era);
+  }
+
+  const bearers = Array.isArray(d.bearers) ? d.bearers.filter(Boolean) : [];
+  if (bearers.length) {
+    const listWrap = document.createElement('p');
+    listWrap.innerHTML = '<em>Filed beside —</em>';
+    el.resultDossierBody.appendChild(listWrap);
+    const ul = document.createElement('ul');
+    ul.className = 'dossier-list compact';
+    bearers.slice(0, 3).forEach(b => {
+      const li = document.createElement('li');
+      li.textContent = b;
+      ul.appendChild(li);
+    });
+    el.resultDossierBody.appendChild(ul);
+  }
+
+  if (d.ink_note) {
+    const ink = document.createElement('p');
+    ink.className = 'dossier-ink';
+    ink.textContent = d.ink_note;
+    el.resultDossierBody.appendChild(ink);
+  }
 }
 
 function updateShareUrl() {
   try {
     const payload = {
-      v: 2,
+      v: 3,
       n: state.name,
+      dos: state.dossier || null,
       qs: state.questions,
       as: state.answers,
       k: state.archetypeKey,
@@ -478,6 +654,7 @@ function share() {
 // ------- restart -------
 function restart() {
   state.name = '';
+  state.dossier = null;
   state.questions = [];
   state.answers = [];
   state.archetypeKey = '';
@@ -492,7 +669,7 @@ function restart() {
 
 // ------- bootstrap -------
 document.addEventListener('DOMContentLoaded', () => {
-  // Restore from URL fragment, if present (full v2 payload).
+  // Restore from URL fragment, if present.
   const frag = location.hash.startsWith('#l=') ? location.hash.slice(3) : '';
   const restored = frag ? decodeState(frag) : null;
 
@@ -512,7 +689,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     el.nameError.hidden = true;
     state.name = val;
-    await runFollowupStage();
+    await runDossierStage();
   });
 
   el.nameInput.addEventListener('keydown', (e) => {
@@ -522,8 +699,13 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
+  if (el.dossierContinue) {
+    el.dossierContinue.addEventListener('click', async () => {
+      await runFollowupStage();
+    });
+  }
+
   el.sealEnvelope.addEventListener('click', async () => {
-    // Collect answers
     const inputs = el.fuList.querySelectorAll('.fu-input');
     const answers = Array.from(inputs).map(n => (n.value || '').trim());
     const filled = answers.filter(a => a.length >= 2).length;
@@ -541,6 +723,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   if (restored) {
     state.name = restored.n || '';
+    state.dossier = (restored.dos && typeof restored.dos === 'object') ? restored.dos : null;
     state.questions = Array.isArray(restored.qs) ? restored.qs : [];
     state.answers = Array.isArray(restored.as) ? restored.as : [];
     state.archetypeKey = restored.k || '';
