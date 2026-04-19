@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Dead Poets' Pen Pal</title>
   <meta property="og:title" content="Dead Poets' Pen Pal">
-  <meta property="og:description" content="Answer 8 questions and receive a personalized handwritten letter from your epistolary twin across history.">
+  <meta property="og:description" content="Whisper your name to the archive and receive a personalized handwritten letter from your epistolary twin across history.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://benlirio.com/dead-poets-pen-pal/">
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -28,26 +28,32 @@
       <section id="intro" class="screen">
         <p class="lede">
           Somewhere in the candle-smoke of the archives, a letter-writer has been waiting
-          on you. Answer the eight queries below. Whisper what you secretly miss.
-          We will find your epistolary twin.
+          on you. Whisper your full name. We will rifle through the registry, ask you
+          a few intimate questions, and find your epistolary twin.
         </p>
         <button id="begin" class="ink-button">Begin the correspondence</button>
       </section>
 
-      <!-- Quiz screen -->
-      <section id="quiz" class="screen" hidden>
-        <div id="quiz-progress" class="progress">Question 1 of 8</div>
-        <div id="quiz-question"></div>
-        <div id="quiz-secret" hidden>
-          <label for="secret-input" class="secret-label">
-            <span class="q-num">9.</span> &mdash; and one thing more &mdash;<br>
-            <em>What do you secretly miss?</em>
-          </label>
-          <textarea id="secret-input" maxlength="180" rows="3"
-            placeholder="a kitchen in a house that isn't there anymore..."></textarea>
-          <button id="seal-envelope" class="ink-button">Seal the envelope</button>
-          <div id="secret-error" class="err-msg" hidden></div>
-        </div>
+      <!-- Name screen -->
+      <section id="name-screen" class="screen" hidden>
+        <div class="progress">Your full name, please</div>
+        <label for="name-input" class="secret-label">
+          <em>Sign the register &mdash;</em><br>
+          so the archive knows where to send the reply.
+        </label>
+        <input id="name-input" type="text" maxlength="80"
+          placeholder="Eleanor Whitfield" autocomplete="name" spellcheck="false" />
+        <button id="register-name" class="ink-button">Consult the archive</button>
+        <div id="name-error" class="err-msg" hidden></div>
+      </section>
+
+      <!-- Follow-ups screen -->
+      <section id="followups" class="screen" hidden>
+        <div class="progress" id="fu-progress">A few intimate queries</div>
+        <p class="writer-line" id="fu-preamble"></p>
+        <div id="fu-list"></div>
+        <button id="seal-envelope" class="ink-button">Seal the envelope</button>
+        <div id="fu-error" class="err-msg" hidden></div>
       </section>
 
       <!-- Loading screen -->
@@ -69,6 +75,7 @@
           <div class="letter-corner tr"></div>
           <div class="letter-corner bl"></div>
           <div class="letter-corner br"></div>
+          <div class="letter-salutation" id="letter-salutation"></div>
           <div class="letter-body" id="letter-body"></div>
           <div class="letter-signature" id="letter-signature"></div>
         </article>

@@ -234,7 +234,9 @@ body {
   color: var(--ink-faded);
 }
 
-#secret-input {
+#secret-input,
+#name-input,
+.fu-input {
   width: 100%;
   padding: 12px 14px;
   font-family: 'Caveat', cursive;
@@ -246,11 +248,54 @@ body {
   border-radius: 2px;
   resize: vertical;
   min-height: 80px;
+  box-sizing: border-box;
 }
 
-#secret-input:focus { outline: 2px solid rgba(31,26,58,0.35); outline-offset: 2px; }
+#name-input {
+  min-height: 52px;
+  font-size: 26px;
+  letter-spacing: 0.5px;
+  margin-bottom: 14px;
+}
+
+#secret-input:focus,
+#name-input:focus,
+.fu-input:focus { outline: 2px solid rgba(31,26,58,0.35); outline-offset: 2px; }
 
 #seal-envelope { margin-top: 14px; }
+#register-name { margin-top: 4px; }
+
+/* follow-up questions */
+.fu-item {
+  margin: 0 0 20px;
+}
+
+.fu-question {
+  font-family: 'IM Fell English', serif;
+  font-size: 19px;
+  line-height: 1.4;
+  color: var(--ink);
+  margin: 0 0 8px;
+}
+
+.fu-question .q-num {
+  font-style: italic;
+  color: var(--gold);
+  margin-right: 6px;
+}
+
+.fu-input {
+  min-height: 64px;
+}
+
+/* letter salutation (the "Dear Eleanor —" line) */
+.letter-salutation {
+  font-family: 'Caveat', cursive;
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--ink);
+  margin-bottom: 10px;
+}
 
 .err-msg {
   font-family: 'IM Fell English', serif;

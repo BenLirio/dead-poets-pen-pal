@@ -1,6 +1,10 @@
-// Dead Poets' Pen Pal — deterministic archetype pick + AI-generated personalized letter
+// Dead Poets' Pen Pal — AI-driven personalization: name -> follow-ups -> letter.
+// The AI uses its own knowledge of the given name (common associations, famous bearers,
+// linguistic/cultural roots) to generate personalized follow-up questions and a letter
+// in the voice of a historical correspondent. Deterministic fallbacks on every AI call.
 
 const AI_ENDPOINT = 'https://uy3l6suz07.execute-api.us-east-1.amazonaws.com/ai';
+const MODEL = 'gpt-5.4-mini';
 const SLUG = 'dead-poets-pen-pal';
 
 // ------- hashing / seeded determinism -------
@@ -10,84 +14,7 @@ function hash(str) {
   return Math.abs(h);
 }
 
-// ------- the eight mood/life questions -------
-// Each question has 4 options. Choice index (0..3) is stored per question.
-const QUESTIONS = [
-  {
-    q: 'A letter, in your hand, would most likely begin:',
-    options: [
-      'My dearest,',
-      'Comrade —',
-      'To the stranger who will read this,',
-      'Darling idiot,',
-    ],
-  },
-  {
-    q: 'Pick a room to write from:',
-    options: [
-      'a garret with a candle and a cracked window',
-      'a rented chamber above a noisy street',
-      'a parlor lit by oil lamps and bad news',
-      'a wooden bunk, somewhere on the move',
-    ],
-  },
-  {
-    q: 'Your weather, lately:',
-    options: [
-      'a long, low autumn with bruised light',
-      'the kind of winter that hides behind laughter',
-      'one clear hour between two storms',
-      'summer, but the wrong summer',
-    ],
-  },
-  {
-    q: 'Your great private suspicion:',
-    options: [
-      'that I am, in fact, brilliant and nobody knows',
-      'that I have been fooling everyone, including myself',
-      'that I will be understood, but only after I am gone',
-      'that love is a kind of espionage',
-    ],
-  },
-  {
-    q: 'Choose a vice:',
-    options: [
-      'too much tea and too much hope',
-      'absinthe, wit, and late returns home',
-      'coded notes and second bottles of wine',
-      'pacing — always pacing',
-    ],
-  },
-  {
-    q: 'Your relationship to the past:',
-    options: [
-      'I write to it almost nightly',
-      'I refuse it, grandly, in a velvet coat',
-      'I decoded it too late',
-      'I am still riding away from it',
-    ],
-  },
-  {
-    q: 'What the dawn feels like, to you:',
-    options: [
-      'a promise made by someone who will not keep it',
-      'the start of a performance',
-      'a checkpoint I have survived',
-      'another stage to the next town',
-    ],
-  },
-  {
-    q: 'If a friend opened your letter aloud, they would say:',
-    options: [
-      '"oh — they are in love with a ghost again"',
-      '"only they could make heartbreak sound expensive"',
-      '"read this one when the house is empty"',
-      '"they signed off in a hurry — as always"',
-    ],
-  },
-];
-
-// ------- archetypes: historical letter-writers -------
+// ------- archetypes: historical letter-writers (voices the letter can be drafted in) -------
 const ARCHETYPES = [
   {
     key: 'keats',
@@ -187,35 +114,34 @@ const ARCHETYPES = [
   },
 ];
 
-// ------- deterministic archetype pick from the 8 choice indexes -------
-// Uses hash over the chip selections (stringified) modulo archetype count.
-function pickArchetype(choices) {
-  const seed = hash(choices.join('-'));
-  return ARCHETYPES[seed % ARCHETYPES.length];
+const ARCHETYPE_KEYS = ARCHETYPES.map(a => a.key);
+const ARCHETYPE_BY_KEY = Object.fromEntries(ARCHETYPES.map(a => [a.key, a]));
+
+function pickArchetypeByKey(key, fallbackSeed) {
+  if (key && ARCHETYPE_BY_KEY[key]) return ARCHETYPE_BY_KEY[key];
+  return ARCHETYPES[(fallbackSeed || 0) % ARCHETYPES.length];
 }
 
-// ------- deterministic fallback letter, per archetype -------
-const FALLBACKS = {
-  keats: `My dear friend,\n\nI write to you in that unkind hour when the candle has burned low and the world has gone quiet enough to be overheard. I have been thinking on what you said — that you miss the things you cannot name, and that is the very subject of every poem I have failed to finish.\n\nDo not mistake your melancholy for a verdict. It is a weather, and weather passes.\n\nIf the nightingale sings, listen. If it does not, you will still be kinder than most for having wanted to hear it.`,
-  woolf: `Dear you,\n\nThere are afternoons — one of them was today — when a single sentence of yours arrives like a gust through the dining-room window, and rearranges all the smaller things I had set out so carefully. I am not sure whether to thank you or to close the sash.\n\nYou miss what you miss. I find the missing is often the most honest part of a person; the rest is arrangement.\n\nWrite again when the tide is right. I will be here, pretending to read.`,
-  wilde: `My dear, dear thing,\n\nYou have written to me in the small hours, which is the only time anyone of any consequence writes at all. I have read your letter twice and held it against the lamp for a third reading, which revealed nothing but my own handwriting answering yours.\n\nTo miss something is merely to love it out loud, without permission. You have my permission. You did not need it.\n\nBe extravagant. It is the only economy left.`,
-  pony: `Friend,\n\nGot your note passed down at the relay. Read it while the new mare ate. Short on time — storm's coming up from the south and I've got forty to go.\n\nWhat you miss sounded a lot like what I miss, only you said it better. Hold the reins looser than you think. That's how you keep going.\n\nPost won't wait. Neither will I. Riding on.`,
-  spy: `Dear correspondent,\n\nThe weather here is, as always, colder than reported. Our mutual friend sends his regards, though I suspect he sends them to everyone. Please disregard the third paragraph of your last letter — or rather, please read only the third paragraph.\n\nWhat you miss, you have correctly identified. That is rarer than you think. Most people miss the wrong thing, loudly.\n\nBurn this after reading. Or don't. I trust you.`,
-  alchemist: `To the seeker,\n\nI have read your letter beside the furnace, which is the only honest light in this house. There is, in every soul, a vessel that cracks under too much heat and another that only speaks under it. You, I think, are the latter.\n\nWhat you miss is not lost. It is merely in solution. The work is patience.\n\nBe of good courage. The lead of this hour has already begun to change.`,
-  ww1nurse: `Dear heart,\n\nThe blackout's drawn, the ward's finally quiet, and I'm writing on the back of a requisition form because that is what we have. Don't apologize for what you said — it arrived at exactly the right moment, which is more than most sentences manage.\n\nWhat you miss, keep missing. It is proof you loved it properly.\n\nGet some rest. That is a medical order, issued without authority.`,
-  dickinson: `Dear friend —\n\nA Letter — is a kind of Bird — that flies on borrowed Weather — and yours — has landed — here — at the upstairs window —\n\nYou miss what you miss — and I have found — that what is missed — is merely — Waiting — in another Room —\n\nDo not go down — for the voices — Stay — and write to me — again —`,
-  samurai: `To the one who wrote:\n\nThe plum blossom in the courtyard has fallen. Your letter came the same morning; I read it twice, slowly, with tea gone cold.\n\nWhat you miss is a companion one does not dismiss. Walk with it. It will tire before you do.\n\nThe road continues. I continue on it.`,
-  explorer: `Dear old thing,\n\nWriting this with three fingers that still work, two that are taking the winter off. The dogs are quieter than they should be. The wind is doing what the wind does.\n\nYou said what you miss, and I have underlined it in my head. It is a reasonable thing to miss. I miss similar.\n\nIf this letter arrives — splendid. If not, you already know what it said.`,
-  rilke: `Mein Freund,\n\nYour letter came in the early hour when the window is still undecided between night and morning, and I read it as one reads a question put gently. Do not hurry the answer in yourself. Some things in us take a long season to ripen, and they are ruined by early harvest.\n\nWhat you miss — hold it the way one holds a candle in a draft. It will flicker; it will not go out.\n\nLive the question. The answer, when it comes, will find you already changed.`,
-  lighthouse: `Friend,\n\nThe lamp is lit, the sea's the usual sea, the gulls are behaving — which is to say, badly. Your letter came out with the supply boat; I've read it twice over supper.\n\nWhat you miss, miss freely. Four miles of water between me and anyone, and I've learned that missing is only love doing its night-shift.\n\nLight holds. So will you.`,
-};
+// ------- deterministic fallback follow-up questions (if AI fails on stage 1) -------
+const FALLBACK_FOLLOWUPS = [
+  'What is a room you have loved and left?',
+  'What did you secretly want that you are almost willing to admit now?',
+  'Who are you writing to, really, when no one is watching?',
+];
+
+const FALLBACK_PREAMBLE = 'The archive cannot find your exact file — but the shelf it would have been on is warm. A few intimate queries, and we will do the rest.';
+
+// ------- deterministic fallback letter -------
+const FALLBACK_LETTER =
+  `My dear friend,\n\n` +
+  `I write to you in that unkind hour when the candle has burned low and the world has gone quiet enough to be overheard. What you have told me arrived like weather — unarguable, and quietly rearranging the furniture of the room.\n\n` +
+  `Do not mistake your missing for a verdict. It is only the ordinary proof that you loved the thing properly. Hold it the way one holds a candle in a draft: it will flicker; it will not go out.\n\n` +
+  `Write again when the tide is right. I will be here, pretending to read.`;
 
 // ------- URL-fragment sharing -------
-function encodeState(choices, secret) {
-  // choices: array of 8 ints 0..3; secret: string (<=180 chars)
-  const payload = { c: choices, s: secret || '' };
+// v2 payload: { v:2, n: full_name, qs: [strings], as: [strings], k: archetype_key, sal: string, ltr: string }
+function encodeState(payload) {
   const json = JSON.stringify(payload);
-  // URL-safe base64
   const b64 = btoa(unescape(encodeURIComponent(json)))
     .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
   return b64;
@@ -227,36 +153,44 @@ function decodeState(frag) {
     while (b64.length % 4) b64 += '=';
     const json = decodeURIComponent(escape(atob(b64)));
     const obj = JSON.parse(json);
-    if (!Array.isArray(obj.c) || obj.c.length !== 8) return null;
-    if (!obj.c.every(n => Number.isInteger(n) && n >= 0 && n <= 3)) return null;
-    if (typeof obj.s !== 'string') return null;
+    if (!obj || typeof obj !== 'object') return null;
+    if (obj.v !== 2) return null;
+    if (typeof obj.n !== 'string') return null;
+    if (!Array.isArray(obj.qs) || !Array.isArray(obj.as)) return null;
+    if (typeof obj.ltr !== 'string') return null;
     return obj;
   } catch (_) { return null; }
 }
 
 // ------- state -------
 const state = {
-  qIdx: 0,
-  choices: [], // indexes into QUESTIONS[i].options
-  secret: '',
+  name: '',
+  questions: [],   // 3 strings (from AI or fallback)
+  answers: [],     // parallel array of user responses
+  archetypeKey: '',
+  salutation: '',
+  letter: '',
 };
 
 // ------- DOM -------
 const el = {
   intro: document.getElementById('intro'),
   begin: document.getElementById('begin'),
-  quiz: document.getElementById('quiz'),
-  quizProgress: document.getElementById('quiz-progress'),
-  quizQuestion: document.getElementById('quiz-question'),
-  quizSecret: document.getElementById('quiz-secret'),
-  secretInput: document.getElementById('secret-input'),
+  nameScreen: document.getElementById('name-screen'),
+  nameInput: document.getElementById('name-input'),
+  registerName: document.getElementById('register-name'),
+  nameError: document.getElementById('name-error'),
+  followups: document.getElementById('followups'),
+  fuPreamble: document.getElementById('fu-preamble'),
+  fuList: document.getElementById('fu-list'),
   sealEnvelope: document.getElementById('seal-envelope'),
-  secretError: document.getElementById('secret-error'),
+  fuError: document.getElementById('fu-error'),
   loading: document.getElementById('loading'),
   loadingMsg: document.getElementById('loading-msg'),
   result: document.getElementById('result'),
   writerName: document.getElementById('writer-name'),
   writerLine: document.getElementById('writer-line'),
+  letterSalutation: document.getElementById('letter-salutation'),
   letterBody: document.getElementById('letter-body'),
   letterSignature: document.getElementById('letter-signature'),
   share: document.getElementById('share'),
@@ -265,60 +199,19 @@ const el = {
 
 // ------- rendering -------
 function showScreen(name) {
-  ['intro', 'quiz', 'loading', 'result'].forEach(s => {
+  const screens = ['intro', 'nameScreen', 'followups', 'loading', 'result'];
+  screens.forEach(s => {
     const node = el[s];
     if (!node) return;
     if (s === name) {
       node.hidden = false;
       node.classList.remove('fade-enter');
-      // force reflow so animation replays
       void node.offsetWidth;
       node.classList.add('fade-enter');
     } else {
       node.hidden = true;
     }
   });
-}
-
-function renderQuestion(i) {
-  state.qIdx = i;
-  el.quizProgress.textContent = `Question ${i + 1} of 8`;
-  const Q = QUESTIONS[i];
-  el.quizQuestion.innerHTML = '';
-  el.quizSecret.hidden = true;
-
-  const title = document.createElement('h2');
-  title.className = 'q-title';
-  title.innerHTML = `<span class="q-num">${i + 1}.</span>${escapeHtml(Q.q)}`;
-  el.quizQuestion.appendChild(title);
-
-  const chips = document.createElement('div');
-  chips.className = 'chips';
-  Q.options.forEach((opt, idx) => {
-    const b = document.createElement('button');
-    b.className = 'chip';
-    b.type = 'button';
-    b.textContent = opt;
-    b.addEventListener('click', () => {
-      state.choices[i] = idx;
-      if (i < QUESTIONS.length - 1) {
-        renderQuestion(i + 1);
-        // scroll to top of quiz region
-        el.quiz.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      } else {
-        showSecretPrompt();
-      }
-    });
-    chips.appendChild(b);
-  });
-  el.quizQuestion.appendChild(chips);
-}
-
-function showSecretPrompt() {
-  el.quizQuestion.innerHTML = '';
-  el.quizProgress.textContent = 'One final question';
-  el.quizSecret.hidden = false;
-  el.secretInput.focus({ preventScroll: false });
 }
 
 function escapeHtml(s) {
@@ -328,6 +221,32 @@ function escapeHtml(s) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+}
+
+function renderFollowups(preamble, questions) {
+  el.fuPreamble.textContent = preamble || '';
+  el.fuList.innerHTML = '';
+  questions.forEach((q, i) => {
+    const item = document.createElement('div');
+    item.className = 'fu-item';
+
+    const label = document.createElement('label');
+    label.className = 'fu-question';
+    label.setAttribute('for', 'fu-' + i);
+    label.innerHTML = `<span class="q-num">${i + 1}.</span>${escapeHtml(q)}`;
+
+    const input = document.createElement('textarea');
+    input.className = 'fu-input';
+    input.id = 'fu-' + i;
+    input.rows = 2;
+    input.maxLength = 280;
+    input.placeholder = 'a line, or two, or as much as you can stand…';
+    input.dataset.idx = String(i);
+
+    item.appendChild(label);
+    item.appendChild(input);
+    el.fuList.appendChild(item);
+  });
 }
 
 // ------- loading messages -------
@@ -340,35 +259,32 @@ const LOADING_MESSAGES = [
   'Folding the page along the same old crease…',
   'Listening for your name in the margins…',
 ];
+const ARCHIVE_MESSAGES = [
+  'Rifling the registry for your name…',
+  'Consulting the index of forgotten correspondents…',
+  'Lighting a second candle — the archive is dusty…',
+];
 
-function pickLoadingMessage(choices) {
-  return LOADING_MESSAGES[hash((choices || []).join('-')) % LOADING_MESSAGES.length];
+function pickLoadingMessage(seed, from) {
+  const pool = from || LOADING_MESSAGES;
+  return pool[hash(String(seed || '')) % pool.length];
 }
 
-// ------- AI call -------
-async function generateLetter(archetype, choices, secret) {
-  const chipAnswers = choices.map((idx, i) => ({
-    q: QUESTIONS[i].q,
-    a: QUESTIONS[i].options[idx],
-  }));
+// ------- AI call: stage 1 — follow-up questions informed by the name -------
+async function generateFollowups(fullName) {
   const systemPrompt = [
-    `You are writing a short, personal, handwritten-style letter in the voice of ${archetype.name}.`,
-    `Setting: ${archetype.era}.`,
-    `Voice: ${archetype.voice}.`,
-    `The letter is addressed directly to the reader (use "you" or "dear friend" or similar, never a real name).`,
-    `It must clearly reference at least TWO of the answers below, by image or phrasing — not quoting verbatim. It must also acknowledge what they secretly miss (the final field).`,
-    `Length: 3 short paragraphs. 90 to 140 words total. No lists, no headings, no hashtags, no emojis.`,
-    `Do NOT include a signature or sign-off (that will be appended separately).`,
-    `Do NOT use modern slang. Stay in period-appropriate diction for the persona.`,
-    `Output plain text only. No markdown, no quotes around the whole letter.`,
+    `You are the intake archivist for a curated 19th/early-20th-century letter-correspondence service called "Dead Poets' Pen Pal".`,
+    `The user has just given you a full name. Using whatever you know about that name — its cultural/linguistic roots, famous bearers across history, common associations, the kind of person who tends to carry it — draft three short, intimate follow-up questions that would personalize a handwritten letter addressed to this specific person.`,
+    `The questions should feel warmly specific to the name (draw on associations) without being generic biographical prompts and without claiming facts about the actual user.`,
+    `Also write a one-sentence "preamble" that gently acknowledges the name and invites them to answer.`,
+    `Do NOT address the user as a celebrity even if the name matches one. The name is a hook for personalization, not a claim of identity.`,
+    `Tone: the app's aesthetic is parchment, iron-gall ink, Victorian correspondence. Questions should sound like a thoughtful stranger across a candlelit desk — not a therapist, not a personality quiz. Short. Sentence-length. No multiple-choice.`,
+    `Return strict JSON ONLY, matching exactly this schema:`,
+    `{"preamble": string, "questions": [string, string, string]}`,
+    `No markdown, no code fences, no explanation — JSON only.`,
   ].join(' ');
 
-  // user content is compact JSON of their inputs
-  const safeSecret = (secret || '').slice(0, 180).replace(/[\r\n]+/g, ' ');
-  const userPrompt = JSON.stringify({
-    chip_answers: chipAnswers,
-    secretly_miss: safeSecret,
-  });
+  const userPrompt = JSON.stringify({ full_name: fullName });
 
   try {
     const res = await fetch(AI_ENDPOINT, {
@@ -376,42 +292,153 @@ async function generateLetter(archetype, choices, secret) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         slug: SLUG,
+        model: MODEL,
+        temperature: 0.8,
+        max_tokens: 400,
+        response_format: 'json_object',
         messages: [
           { role: 'system', content: systemPrompt },
           { role: 'user',   content: userPrompt },
         ],
-        max_tokens: 320,
       }),
     });
     if (!res.ok) throw new Error('http_' + res.status);
     const data = await res.json();
-    const text = (data.content || '').trim();
-    if (!text) throw new Error('empty');
-    return text;
+    const raw = (data && typeof data.content === 'string') ? data.content.trim() : '';
+    if (!raw) throw new Error('empty');
+
+    // Strip accidental code fences if model wraps them.
+    const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+    const parsed = JSON.parse(cleaned);
+
+    if (!parsed || typeof parsed !== 'object') throw new Error('bad_obj');
+    const questions = Array.isArray(parsed.questions) ? parsed.questions.map(q => String(q).trim()).filter(Boolean) : [];
+    if (questions.length < 3) throw new Error('too_few_questions');
+    const preamble = typeof parsed.preamble === 'string' ? parsed.preamble.trim() : '';
+
+    return {
+      preamble: preamble || FALLBACK_PREAMBLE,
+      questions: questions.slice(0, 3),
+    };
   } catch (_) {
-    return FALLBACKS[archetype.key] || FALLBACKS.keats;
+    return { preamble: FALLBACK_PREAMBLE, questions: FALLBACK_FOLLOWUPS.slice() };
   }
 }
 
+// ------- AI call: stage 2 — letter itself (with archetype pick) -------
+async function generateLetter(fullName, questions, answers) {
+  const qa = questions.map((q, i) => ({ q, a: String(answers[i] || '').slice(0, 400) }));
+
+  const allowed = ARCHETYPES.map(a => `- ${a.key}: ${a.name} — ${a.voice}`).join('\n');
+
+  const systemPrompt = [
+    `You are the scrivener for "Dead Poets' Pen Pal". You draft short, handwritten-style letters.`,
+    `Task: given the recipient's full name and their answers to three intimate queries, (1) pick the ONE historical letter-writer archetype below whose voice best fits them, then (2) compose a personalized letter in that archetype's voice.`,
+    `The letter MUST feel written TO this specific person: open with a handwritten-style salutation that uses their first name (e.g. "Dear Eleanor —" or "My dear Eleanor,"). Weave in at least two specific details from their answers by image or phrasing — not quoting verbatim. You may gently draw on warm, common associations of the name (linguistic roots, era, feel) without claiming facts about the actual user.`,
+    `Length: 3 short paragraphs in the letter body (NOT counting the salutation). 100 to 160 words total in the body. No lists, no headings, no hashtags, no emojis.`,
+    `Do NOT include a sign-off or signature in the body (it will be appended separately).`,
+    `Stay in period-appropriate diction for the archetype. No modern slang. No references to AI, apps, websites, or the questionnaire.`,
+    `Allowed archetype keys (pick EXACTLY one, exact key spelling):`,
+    allowed,
+    `Return strict JSON ONLY, schema:`,
+    `{"archetype_key": string, "salutation": string, "letter": string}`,
+    `"salutation" is just the opening line (e.g. "Dear Eleanor —"). "letter" is the 3 paragraphs of body text, separated by blank lines. No markdown. No code fences. JSON only.`,
+  ].join('\n');
+
+  const userPrompt = JSON.stringify({ full_name: fullName, follow_ups: qa });
+
+  try {
+    const res = await fetch(AI_ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        slug: SLUG,
+        model: MODEL,
+        temperature: 0.85,
+        max_tokens: 600,
+        response_format: 'json_object',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user',   content: userPrompt },
+        ],
+      }),
+    });
+    if (!res.ok) throw new Error('http_' + res.status);
+    const data = await res.json();
+    const raw = (data && typeof data.content === 'string') ? data.content.trim() : '';
+    if (!raw) throw new Error('empty');
+
+    const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+    const parsed = JSON.parse(cleaned);
+
+    if (!parsed || typeof parsed !== 'object') throw new Error('bad_obj');
+    const key = ARCHETYPE_KEYS.indexOf(parsed.archetype_key) >= 0
+      ? parsed.archetype_key
+      : ARCHETYPE_KEYS[hash(fullName) % ARCHETYPE_KEYS.length];
+    const salutation = (typeof parsed.salutation === 'string' && parsed.salutation.trim())
+      ? parsed.salutation.trim()
+      : defaultSalutation(fullName);
+    const letter = typeof parsed.letter === 'string' ? parsed.letter.trim() : '';
+    if (!letter) throw new Error('empty_letter');
+
+    return { archetypeKey: key, salutation, letter };
+  } catch (_) {
+    return {
+      archetypeKey: ARCHETYPE_KEYS[hash(fullName) % ARCHETYPE_KEYS.length],
+      salutation: defaultSalutation(fullName),
+      letter: FALLBACK_LETTER,
+    };
+  }
+}
+
+function defaultSalutation(fullName) {
+  const first = String(fullName || '').trim().split(/\s+/)[0] || 'friend';
+  return `Dear ${first} —`;
+}
+
 // ------- result flow -------
-async function reveal() {
-  const archetype = pickArchetype(state.choices);
-  // loading screen
-  el.loadingMsg.textContent = pickLoadingMessage(state.choices);
+async function runFollowupStage() {
+  el.loadingMsg.textContent = pickLoadingMessage(state.name, ARCHIVE_MESSAGES);
   showScreen('loading');
 
   const minLoad = new Promise(r => setTimeout(r, 900));
-  const letterP = generateLetter(archetype, state.choices, state.secret);
-  const [_, letterText] = await Promise.all([minLoad, letterP]);
+  const fuP = generateFollowups(state.name);
+  const [_, { preamble, questions }] = await Promise.all([minLoad, fuP]);
 
-  // render
+  state.questions = questions;
+  state.answers = new Array(questions.length).fill('');
+
+  renderFollowups(preamble, questions);
+  showScreen('followups');
+}
+
+async function runLetterStage() {
+  el.loadingMsg.textContent = pickLoadingMessage(state.name + '|' + state.answers.join('|'));
+  showScreen('loading');
+
+  const minLoad = new Promise(r => setTimeout(r, 900));
+  const letterP = generateLetter(state.name, state.questions, state.answers);
+  const [_, out] = await Promise.all([minLoad, letterP]);
+
+  state.archetypeKey = out.archetypeKey;
+  state.salutation = out.salutation;
+  state.letter = out.letter;
+
+  renderResult();
+  updateShareUrl();
+}
+
+function renderResult() {
+  const archetype = pickArchetypeByKey(state.archetypeKey, hash(state.name));
+
   el.writerName.textContent = archetype.name;
   el.writerLine.textContent = archetype.tagline + ' — ' + archetype.era + '.';
 
+  el.letterSalutation.textContent = state.salutation || defaultSalutation(state.name);
+
   el.letterBody.innerHTML = '';
-  // split on blank lines → paragraphs
-  const paragraphs = letterText.split(/\n\s*\n/).map(p => p.trim()).filter(Boolean);
-  (paragraphs.length ? paragraphs : [letterText]).forEach(p => {
+  const paragraphs = (state.letter || '').split(/\n\s*\n/).map(p => p.trim()).filter(Boolean);
+  (paragraphs.length ? paragraphs : [state.letter || '']).forEach(p => {
     const node = document.createElement('p');
     node.textContent = p;
     el.letterBody.appendChild(node);
@@ -420,15 +447,25 @@ async function reveal() {
 
   el.share.style.display = 'block';
   showScreen('result');
+}
 
-  // update URL fragment so this letter is shareable
+function updateShareUrl() {
   try {
-    const frag = encodeState(state.choices, state.secret);
+    const payload = {
+      v: 2,
+      n: state.name,
+      qs: state.questions,
+      as: state.answers,
+      k: state.archetypeKey,
+      sal: state.salutation,
+      ltr: state.letter,
+    };
+    const frag = encodeState(payload);
     history.replaceState(null, '', '#l=' + frag);
   } catch (_) {}
 }
 
-// ------- share (required) -------
+// ------- share -------
 function share() {
   if (navigator.share) {
     navigator.share({ title: document.title, url: location.href });
@@ -440,52 +477,76 @@ function share() {
 
 // ------- restart -------
 function restart() {
-  state.qIdx = 0;
-  state.choices = [];
-  state.secret = '';
-  if (el.secretInput) el.secretInput.value = '';
-  if (el.secretError) el.secretError.hidden = true;
+  state.name = '';
+  state.questions = [];
+  state.answers = [];
+  state.archetypeKey = '';
+  state.salutation = '';
+  state.letter = '';
+  if (el.nameInput) el.nameInput.value = '';
+  if (el.nameError) el.nameError.hidden = true;
+  if (el.fuError) el.fuError.hidden = true;
   history.replaceState(null, '', location.pathname + location.search);
   showScreen('intro');
 }
 
 // ------- bootstrap -------
 document.addEventListener('DOMContentLoaded', () => {
-  // restore from URL fragment, if present
+  // Restore from URL fragment, if present (full v2 payload).
   const frag = location.hash.startsWith('#l=') ? location.hash.slice(3) : '';
   const restored = frag ? decodeState(frag) : null;
 
   el.begin.addEventListener('click', () => {
-    state.choices = [];
-    state.secret = '';
-    showScreen('quiz');
-    renderQuestion(0);
+    restart();
+    showScreen('nameScreen');
+    setTimeout(() => el.nameInput && el.nameInput.focus(), 40);
   });
 
-  el.sealEnvelope.addEventListener('click', () => {
-    const val = (el.secretInput.value || '').trim();
-    if (val.length < 3) {
-      el.secretError.hidden = false;
-      el.secretError.textContent = 'hmm — write a line or two, even a small one, so we can find your twin.';
-      el.secretInput.focus();
+  el.registerName.addEventListener('click', async () => {
+    const val = (el.nameInput.value || '').trim();
+    if (val.length < 2) {
+      el.nameError.hidden = false;
+      el.nameError.textContent = 'a full name, please — even a first will do.';
+      el.nameInput.focus();
       return;
     }
-    el.secretError.hidden = true;
-    state.secret = val;
-    reveal();
+    el.nameError.hidden = true;
+    state.name = val;
+    await runFollowupStage();
   });
 
-  el.secretInput.addEventListener('keydown', (e) => {
-    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') el.sealEnvelope.click();
+  el.nameInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      el.registerName.click();
+    }
+  });
+
+  el.sealEnvelope.addEventListener('click', async () => {
+    // Collect answers
+    const inputs = el.fuList.querySelectorAll('.fu-input');
+    const answers = Array.from(inputs).map(n => (n.value || '').trim());
+    const filled = answers.filter(a => a.length >= 2).length;
+    if (filled < Math.max(1, Math.ceil(state.questions.length / 2))) {
+      el.fuError.hidden = false;
+      el.fuError.textContent = 'a line or two on at least half the queries, if you would — the letter needs somewhere to land.';
+      return;
+    }
+    el.fuError.hidden = true;
+    state.answers = answers;
+    await runLetterStage();
   });
 
   if (el.restart) el.restart.addEventListener('click', restart);
 
   if (restored) {
-    state.choices = restored.c.slice();
-    state.secret = restored.s || '';
-    // go straight to reveal
-    reveal();
+    state.name = restored.n || '';
+    state.questions = Array.isArray(restored.qs) ? restored.qs : [];
+    state.answers = Array.isArray(restored.as) ? restored.as : [];
+    state.archetypeKey = restored.k || '';
+    state.salutation = restored.sal || defaultSalutation(state.name);
+    state.letter = restored.ltr || '';
+    renderResult();
   } else {
     showScreen('intro');
   }
