@@ -127,9 +127,46 @@ body {
   font-size: 18px;
   line-height: 1.55;
   color: var(--ink);
-  margin: 18px 6px 26px;
+  margin: 18px 6px 14px;
   text-align: left;
 }
+
+.lede-aside {
+  font-family: 'IM Fell English', serif;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--ink-faded);
+  margin: 0 6px 24px;
+  padding: 8px 10px;
+  border-left: 2px solid rgba(120,90,40,0.5);
+  background: rgba(255,248,220,0.28);
+}
+
+.hint-label {
+  display: block;
+  font-family: 'IM Fell English', serif;
+  font-size: 14px;
+  font-style: italic;
+  color: var(--ink-faded);
+  margin: 4px 0 6px;
+}
+
+#name-hint-input {
+  width: 100%;
+  padding: 10px 12px;
+  font-family: 'IM Fell English', serif;
+  font-size: 16px;
+  line-height: 1.35;
+  color: var(--ink);
+  background: rgba(255,248,220,0.4);
+  border: 1px solid rgba(31,26,58,0.35);
+  border-radius: 2px;
+  margin-bottom: 14px;
+  box-sizing: border-box;
+  min-height: 42px;
+}
+
+#name-hint-input:focus { outline: 2px solid rgba(31,26,58,0.3); outline-offset: 2px; }
 
 .ink-button {
   display: block;
@@ -369,7 +406,41 @@ body {
   letter-spacing: 1px;
 }
 
-#dossier-continue { margin-top: 12px; }
+/* the confirm-row that replaces the old single Continue button */
+.confirm-row {
+  margin-top: 8px;
+}
+
+.confirm-q {
+  font-family: 'IM Fell English', serif;
+  font-size: 17px;
+  font-style: italic;
+  color: var(--ink);
+  text-align: center;
+  margin: 10px 0 12px;
+  letter-spacing: 0.5px;
+}
+
+.confirm-btns {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.confirm-btns .ink-button,
+.confirm-btns .ink-button-ghost {
+  margin: 0;
+}
+
+.confirm-note {
+  font-family: 'IM Fell English', serif;
+  font-size: 12px;
+  color: var(--ink-faded);
+  text-align: center;
+  margin: 14px 0 0;
+  line-height: 1.5;
+  opacity: 0.85;
+}
 
 /* compact dossier footer on the result screen */
 .result-dossier {

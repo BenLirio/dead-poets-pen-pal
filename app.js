@@ -1,13 +1,19 @@
-// Dead Poets' Pen Pal — AI-driven personalization: name -> archive dossier -> follow-ups -> letter.
+// Dead Poets' Pen Pal — AI-driven personalization, now with an actual public-record
+// lookup on the person (not just an etymology of the name).
 //
-// The app now runs a VISIBLE archive-lookup step: after the user gives their name,
-// the AI produces a short "dossier" on the name (origin, era-feel, common
-// associations, notable bearers) which is shown on its own screen before the
-// follow-up questions. This proves to the user that the archive actually
-// "looked them up" — previously this step was silent and the personalization
-// felt invisible. The dossier is also fed back into the follow-up and letter
-// stages so the personalization stays grounded in the same findings the user
-// saw.
+// Direction shift (from user feedback, 2026-04-19): the archivist is supposed to try
+// to figure out WHO the visitor actually is — using only the AI's own knowledge of
+// public, on-the-record information. If the person is identifiable (a public figure,
+// a professional with a visible track record, a historical name they happen to share,
+// etc.), the dossier summarizes that publicly-known portrait and the visitor confirms
+// it ("that's me" / "not me"). If they aren't identifiable, the archive says so
+// gracefully and falls back to a name-only reading. The identification is then
+// threaded into the follow-up questions and the final letter so the personalization
+// feels like the letter was written for THIS specific person, not for their name.
+//
+// Safety / ethics: the lookup is explicitly framed as "public information" and the
+// user is given a visible "not me" escape. We do not store or transmit anything
+// private — the AI is asked only for what is already publicly known.
 
 const AI_ENDPOINT = 'https://uy3l6suz07.execute-api.us-east-1.amazonaws.com/ai';
 const MODEL = 'gpt-5.4-mini';
@@ -128,28 +134,45 @@ function pickArchetypeByKey(key, fallbackSeed) {
   return ARCHETYPES[(fallbackSeed || 0) % ARCHETYPES.length];
 }
 
-// ------- deterministic fallback dossier -------
+// ------- deterministic fallback dossier (used if AI is unreachable) -------
+// New dossier schema: person-first, not etymology-first.
+//   {
+//     identified: bool,
+//     portrait: string,            // what the archive thinks the world knows about THIS person
+//     public_notes: string[],      // 2-4 short factual-feeling lines
+//     era_feel: string,            // the texture they evoke
+//     ink_note: string,            // archivist aside
+//     confidence: 'high'|'low'|'none',
+//     name_only: bool,             // true if we couldn't ID them and fell back to the name
+//   }
 function fallbackDossier(fullName) {
   const first = String(fullName || '').trim().split(/\s+/)[0] || 'friend';
   return {
-    origin: `The archive finds the name "${first}" in more than one drawer — it has wandered between tongues and centuries, and no single desk claims it.`,
-    era_feel: 'Reads like a name you would find on the spine of a slim, well-handled volume — a personal library, not a lending one.',
-    bearers: [
-      'a name that recurs in letters between friends more than on official registers',
-      'used warmly by people who meant it, which is rarer than it sounds',
+    identified: false,
+    name_only: true,
+    confidence: 'none',
+    portrait:
+      `The archivist cannot place a specific public record for "${fullName}" from here. ` +
+      `No one by that name has left enough of a trail in this drawer — which is not a verdict, only an absence.`,
+    public_notes: [
+      'No public biography to cite — the archive declines to invent one.',
+      'Proceeding, instead, from the name itself as it has been carried.',
     ],
-    ink_note: 'Filed under "names the archive has been fond of without quite knowing why."',
+    era_feel:
+      `Reads like a name you would find on the spine of a slim, well-handled volume — ` +
+      `a personal library, not a lending one.`,
+    ink_note: `Filed under "names the archive has been fond of without quite knowing why."`,
   };
 }
 
-// ------- deterministic fallback follow-up questions (if AI fails on stage 2) -------
+// ------- deterministic fallback follow-up questions -------
 const FALLBACK_FOLLOWUPS = [
   'What is a room you have loved and left?',
   'What did you secretly want that you are almost willing to admit now?',
   'Who are you writing to, really, when no one is watching?',
 ];
 
-const FALLBACK_PREAMBLE = 'The archive has turned up the notes above. A few intimate queries to seal the match, and we will do the rest.';
+const FALLBACK_PREAMBLE = 'The archive has turned up what it could. A few intimate queries to seal the match, and we will do the rest.';
 
 // ------- deterministic fallback letter -------
 const FALLBACK_LETTER =
@@ -159,8 +182,9 @@ const FALLBACK_LETTER =
   `Write again when the tide is right. I will be here, pretending to read.`;
 
 // ------- URL-fragment sharing -------
-// v3 payload: { v:3, n: full_name, dos: dossier_obj, qs: [strings], as: [strings],
-//               k: archetype_key, sal: string, ltr: string }
+// v4 payload (adds public-record dossier shape):
+//   { v:4, n, hint, dos, conf: 'identified'|'not_me'|'name_only',
+//     qs, as, k, sal, ltr }
 function encodeState(payload) {
   const json = JSON.stringify(payload);
   const b64 = btoa(unescape(encodeURIComponent(json)))
@@ -175,7 +199,7 @@ function decodeState(frag) {
     const json = decodeURIComponent(escape(atob(b64)));
     const obj = JSON.parse(json);
     if (!obj || typeof obj !== 'object') return null;
-    if (obj.v !== 3 && obj.v !== 2) return null; // v2 still readable for old links
+    if (obj.v !== 4 && obj.v !== 3 && obj.v !== 2) return null; // older versions still readable
     if (typeof obj.n !== 'string') return null;
     if (!Array.isArray(obj.qs) || !Array.isArray(obj.as)) return null;
     if (typeof obj.ltr !== 'string') return null;
@@ -186,9 +210,11 @@ function decodeState(frag) {
 // ------- state -------
 const state = {
   name: '',
-  dossier: null,   // { origin, era_feel, bearers: string[], ink_note }
-  questions: [],   // 3 strings (from AI or fallback)
-  answers: [],     // parallel array of user responses
+  hint: '',          // optional disambiguator the user typed
+  dossier: null,     // see fallbackDossier shape
+  confirm: '',       // 'identified' | 'not_me' | 'name_only'
+  questions: [],
+  answers: [],
   archetypeKey: '',
   salutation: '',
   letter: '',
@@ -200,15 +226,21 @@ const el = {
   begin: document.getElementById('begin'),
   nameScreen: document.getElementById('name-screen'),
   nameInput: document.getElementById('name-input'),
+  nameHintInput: document.getElementById('name-hint-input'),
   registerName: document.getElementById('register-name'),
   nameError: document.getElementById('name-error'),
   dossier: document.getElementById('dossier'),
   dossierName: document.getElementById('dossier-name'),
-  dossierOrigin: document.getElementById('dossier-origin'),
+  dossierStamp: document.getElementById('dossier-stamp'),
+  dossierPortrait: document.getElementById('dossier-portrait'),
+  dossierPortraitLabel: document.getElementById('dossier-portrait-label'),
+  dossierNotes: document.getElementById('dossier-notes'),
+  dossierNotesRow: document.getElementById('dossier-notes-row'),
   dossierEra: document.getElementById('dossier-era'),
-  dossierBearers: document.getElementById('dossier-bearers'),
+  dossierEraRow: document.getElementById('dossier-era-row'),
   dossierInk: document.getElementById('dossier-ink'),
-  dossierContinue: document.getElementById('dossier-continue'),
+  confirmYes: document.getElementById('confirm-yes'),
+  confirmNo: document.getElementById('confirm-no'),
   followups: document.getElementById('followups'),
   fuPreamble: document.getElementById('fu-preamble'),
   fuList: document.getElementById('fu-list'),
@@ -256,21 +288,61 @@ function escapeHtml(s) {
 
 function renderDossier(fullName, dossier) {
   const first = String(fullName || '').trim().split(/\s+/)[0] || 'friend';
-  if (el.dossierName) el.dossierName.textContent = first;
-  if (el.dossierOrigin) el.dossierOrigin.textContent = dossier.origin || '';
-  if (el.dossierEra) el.dossierEra.textContent = dossier.era_feel || '';
+  if (el.dossierName) el.dossierName.textContent = fullName;
 
-  if (el.dossierBearers) {
-    el.dossierBearers.innerHTML = '';
-    const bearers = Array.isArray(dossier.bearers) ? dossier.bearers : [];
-    bearers.slice(0, 4).forEach(b => {
-      const li = document.createElement('li');
-      li.textContent = String(b || '').trim();
-      if (li.textContent) el.dossierBearers.appendChild(li);
-    });
+  // Portrait / stamp / label shift depending on whether we identified them.
+  const idFound = !!dossier.identified && !dossier.name_only;
+  if (el.dossierStamp) {
+    el.dossierStamp.innerHTML = idFound ? 'PUBLIC<br>RECORD' : 'ON THE<br>NAME';
+  }
+  if (el.dossierPortraitLabel) {
+    el.dossierPortraitLabel.textContent = idFound
+      ? 'Best guess from public record'
+      : 'No specific record found';
+  }
+  if (el.dossierPortrait) el.dossierPortrait.textContent = dossier.portrait || '';
+
+  // Public-record notes list
+  if (el.dossierNotes && el.dossierNotesRow) {
+    el.dossierNotes.innerHTML = '';
+    const notes = Array.isArray(dossier.public_notes) ? dossier.public_notes : [];
+    if (notes.length === 0) {
+      el.dossierNotesRow.hidden = true;
+    } else {
+      el.dossierNotesRow.hidden = false;
+      notes.slice(0, 4).forEach(b => {
+        const li = document.createElement('li');
+        li.textContent = String(b || '').trim();
+        if (li.textContent) el.dossierNotes.appendChild(li);
+      });
+    }
+  }
+
+  // Era/feel
+  if (el.dossierEraRow && el.dossierEra) {
+    const era = String(dossier.era_feel || '').trim();
+    if (era) {
+      el.dossierEraRow.hidden = false;
+      el.dossierEra.textContent = era;
+    } else {
+      el.dossierEraRow.hidden = true;
+    }
   }
 
   if (el.dossierInk) el.dossierInk.textContent = dossier.ink_note || '';
+
+  // Tailor the confirm buttons. If we did not ID anyone, there's no "that's me"
+  // to click — the only path is forward on the name.
+  if (el.confirmYes && el.confirmNo) {
+    if (idFound) {
+      el.confirmYes.hidden = false;
+      el.confirmYes.textContent = "That's me — continue";
+      el.confirmNo.textContent = 'Not me — proceed from the name only';
+    } else {
+      el.confirmYes.hidden = true;
+      el.confirmNo.textContent = 'Continue — write from the name alone';
+    }
+  }
 }
 
 function renderFollowups(preamble, questions) {
@@ -310,11 +382,11 @@ const LOADING_MESSAGES = [
   'Listening for your name in the margins…',
 ];
 const ARCHIVE_MESSAGES = [
-  'Rifling the registry for your name…',
-  'Pulling the drawer marked with your initial…',
-  'Consulting the index of forgotten correspondents…',
-  'Cross-referencing the name against three centuries of ink…',
-  'Lighting a second candle — the archive is dusty…',
+  'Checking the public record for your name…',
+  'Pulling the drawer with your biographical file…',
+  'Cross-referencing three public registers…',
+  'Consulting the index of people who appear in ink somewhere…',
+  'Lighting a second candle — the public record is dusty…',
 ];
 
 function pickLoadingMessage(seed, from) {
@@ -322,24 +394,31 @@ function pickLoadingMessage(seed, from) {
   return pool[hash(String(seed || '')) % pool.length];
 }
 
-// ------- AI call: stage 1 — archive dossier on the name (VISIBLE lookup) -------
-async function generateDossier(fullName) {
+// ------- AI call: stage 1 — public-record lookup on THIS person -------
+async function generatePersonDossier(fullName, hint) {
   const systemPrompt = [
-    `You are the archivist for "Dead Poets' Pen Pal", a curated 19th/early-20th-century letter-correspondence service.`,
-    `A visitor has just given you a full name. Using your own knowledge of that name — its linguistic roots, etymology, era-feel, notable bearers in history and literature, and the kind of person who tends to carry it — produce a short ARCHIVE DOSSIER that will be shown to the visitor before the letter is written.`,
-    `The dossier must feel like a real archivist flipping through a drawer — grounded, specific, lightly poetic, warm. Do NOT address the visitor as if they are any of the notable bearers; the name is a hook for personalization, not a claim of identity.`,
-    `Fields (all mandatory):`,
-    `- "origin": 1-2 sentences on the name's linguistic/cultural roots (where it comes from, what it originally meant). Can be approximate if the name is ambiguous — say so gracefully.`,
-    `- "era_feel": 1 sentence on what era/setting/texture the name evokes (e.g. "reads like gaslight and ledger-paper", "feels like a name carried across ship-decks").`,
-    `- "bearers": an array of 2-3 SHORT lines, each naming a notable real historical bearer of the name (or a type of person it is associated with if no famous bearer is obvious) and a one-phrase characterization. Example: "Eleanor of Aquitaine — queen of two kingdoms and a thousand complaints." If nothing famous exists, give character-types instead ("carried by midwives, map-clerks, and people who make bread at 4am").`,
-    `- "ink_note": 1 sentence, lyrical, as if the archivist wrote a small aside in the margin of the file.`,
-    `Tone: parchment, iron-gall ink, thoughtful stranger across a candlelit desk. Period-leaning but readable. No modern slang, no emojis, no markdown.`,
+    `You are the archivist for "Dead Poets' Pen Pal", a curated letter-correspondence service.`,
+    `A visitor has given you a full name and, optionally, a short disambiguating hint. Your task is to try to place THIS SPECIFIC PERSON using ONLY publicly-known information that you already know — biography, public profession, published work, on-the-record affiliations, and similar public-record facts.`,
+    `CRITICAL RULES:`,
+    `1. Use ONLY information that is publicly known and already in your training data. Do not invent facts. Do not cite private information, rumors, or speculation.`,
+    `2. If the name is plausibly a public figure you know of (author, scientist, artist, athlete, historical person, notable professional, etc.), and the hint is consistent, IDENTIFY them and describe them accurately — with epistemic humility ("best guess from public records").`,
+    `3. If you are NOT confident which specific person this is, or if the name is common and the hint is absent or weak, set identified=false and name_only=true. Do NOT guess. The visitor will then be shown a gentler, name-only reading.`,
+    `4. Never refuse — just downgrade to name-only when unsure.`,
+    `5. If identified: "portrait" should describe who they are as the public knows them (role / what they are known for / era / scope). It should be specific enough that the visitor will recognize themselves if it is them, and obviously wrong if it is the wrong person.`,
+    `6. "public_notes" (when identified) should be 2-4 short publicly-known associations — published works, public roles, fields of work, on-the-record collaborations, regions they are associated with. Each note is one short line, no more than ~14 words. NO private info, no speculation, no rumors.`,
+    `7. "era_feel" is 1 sentence on the texture/atmosphere this person (or, if not identified, this name) evokes. Evocative, not factual.`,
+    `8. "ink_note" is 1 short archivist aside, a little lyrical, closing the file.`,
+    `9. If name_only=true, "portrait" must say plainly that no specific public record was placed, and "public_notes" should be empty OR contain 1-2 character-type lines about the name itself ("carried by midwives, map-clerks, and people who make bread at 4am"). Set confidence="none".`,
+    `Tone: parchment, iron-gall ink, thoughtful archivist across a candlelit desk. Readable, not overwrought. No modern slang, no emojis, no markdown.`,
     `Return strict JSON ONLY matching exactly:`,
-    `{"origin": string, "era_feel": string, "bearers": [string, string, string?], "ink_note": string}`,
+    `{"identified": boolean, "name_only": boolean, "confidence": "high"|"low"|"none", "portrait": string, "public_notes": [string, ...], "era_feel": string, "ink_note": string}`,
     `No markdown, no code fences, no explanation — JSON only.`,
   ].join(' ');
 
-  const userPrompt = JSON.stringify({ full_name: fullName });
+  const userPrompt = JSON.stringify({
+    full_name: fullName,
+    hint: String(hint || '').slice(0, 240),
+  });
 
   try {
     const res = await fetch(AI_ENDPOINT, {
@@ -348,7 +427,75 @@ async function generateDossier(fullName) {
       body: JSON.stringify({
         slug: SLUG,
         model: MODEL,
-        temperature: 0.75,
+        temperature: 0.4,
+        max_tokens: 500,
+        response_format: 'json_object',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user',   content: userPrompt },
+        ],
+      }),
+    });
+    if (!res.ok) throw new Error('http_' + res.status);
+    const data = await res.json();
+    const raw = (data && typeof data.content === 'string') ? data.content.trim() : '';
+    if (!raw) throw new Error('empty');
+
+    const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+    const parsed = JSON.parse(cleaned);
+    if (!parsed || typeof parsed !== 'object') throw new Error('bad_obj');
+
+    const portrait = String(parsed.portrait || '').trim();
+    const era_feel = String(parsed.era_feel || '').trim();
+    const ink_note = String(parsed.ink_note || '').trim();
+    const public_notes = Array.isArray(parsed.public_notes)
+      ? parsed.public_notes.map(b => String(b || '').trim()).filter(Boolean).slice(0, 4)
+      : [];
+    const identified = !!parsed.identified && !parsed.name_only;
+    const name_only = !!parsed.name_only || !identified;
+    const confidence = ['high', 'low', 'none'].indexOf(parsed.confidence) >= 0
+      ? parsed.confidence
+      : (identified ? 'low' : 'none');
+
+    if (!portrait) throw new Error('missing_portrait');
+
+    return { identified, name_only, confidence, portrait, public_notes, era_feel, ink_note };
+  } catch (_) {
+    return fallbackDossier(fullName);
+  }
+}
+
+// ------- AI call: stage 2 — follow-up questions informed by WHO this person is -------
+async function generateFollowups(fullName, dossier, confirm) {
+  const systemPrompt = [
+    `You are the intake archivist for "Dead Poets' Pen Pal". The archive has produced a dossier on this visitor (provided below). The visitor has SEEN this dossier and has just confirmed one of three things:`,
+    `- "identified": the public-record portrait was them, so the letter SHOULD draw on it.`,
+    `- "not_me": the public-record portrait was NOT them; do NOT reference the portrait's specifics, treat the visitor as a private individual who shares that name.`,
+    `- "name_only": no public record was placed; draw only on the name itself.`,
+    `Draft three short, intimate follow-up questions that would personalize a handwritten letter to them. The questions should invite specific, personal answers they would actually write.`,
+    `If confirm="identified": at least one question may gently touch on a theme adjacent to their public work or era (e.g. "in the territory you have spent years pacing, what have you come to distrust?") — without flattering or assuming things about their private life.`,
+    `If confirm="not_me" or "name_only": keep the questions universal — loss, longing, rooms, unfinished things. Do NOT reference the portrait. You may subtly echo the era_feel of the name.`,
+    `Also write a ONE-sentence "preamble" that matches the confirm state and invites them to answer.`,
+    `Tone: parchment, iron-gall ink, thoughtful stranger across a candlelit desk. Short. Sentence-length. No multiple-choice. No therapist language. No modern jargon.`,
+    `Return strict JSON ONLY matching exactly:`,
+    `{"preamble": string, "questions": [string, string, string]}`,
+    `No markdown, no code fences, no explanation — JSON only.`,
+  ].join(' ');
+
+  const userPrompt = JSON.stringify({
+    full_name: fullName,
+    dossier: dossier,
+    confirm: confirm,
+  });
+
+  try {
+    const res = await fetch(AI_ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        slug: SLUG,
+        model: MODEL,
+        temperature: 0.8,
         max_tokens: 420,
         response_format: 'json_object',
         messages: [
@@ -364,66 +511,14 @@ async function generateDossier(fullName) {
 
     const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
     const parsed = JSON.parse(cleaned);
-
     if (!parsed || typeof parsed !== 'object') throw new Error('bad_obj');
-    const origin = String(parsed.origin || '').trim();
-    const era_feel = String(parsed.era_feel || '').trim();
-    const bearers = Array.isArray(parsed.bearers)
-      ? parsed.bearers.map(b => String(b || '').trim()).filter(Boolean).slice(0, 3)
+
+    const questions = Array.isArray(parsed.questions)
+      ? parsed.questions.map(q => String(q).trim()).filter(Boolean)
       : [];
-    const ink_note = String(parsed.ink_note || '').trim();
-
-    if (!origin || !era_feel || bearers.length < 1) throw new Error('missing_fields');
-
-    return { origin, era_feel, bearers, ink_note: ink_note || '' };
-  } catch (_) {
-    return fallbackDossier(fullName);
-  }
-}
-
-// ------- AI call: stage 2 — follow-up questions informed by the dossier -------
-async function generateFollowups(fullName, dossier) {
-  const systemPrompt = [
-    `You are the intake archivist for "Dead Poets' Pen Pal". The archive has just produced a dossier on this visitor's name (provided below). The visitor has SEEN this dossier.`,
-    `Draft three short, intimate follow-up questions that would personalize a handwritten letter to them. At least one question should subtly echo a detail from the dossier (era-feel, an association, a bearer's territory) without quoting it verbatim and without assuming the visitor is a famous bearer.`,
-    `Also write a ONE-sentence "preamble" that picks up where the dossier left off and invites them to answer — something like "The archive has pulled its notes. Three queries to seal the match —".`,
-    `Tone: parchment, iron-gall ink, thoughtful stranger across a candlelit desk. Short. Sentence-length. No multiple-choice. No therapist language.`,
-    `Return strict JSON ONLY matching exactly:`,
-    `{"preamble": string, "questions": [string, string, string]}`,
-    `No markdown, no code fences, no explanation — JSON only.`,
-  ].join(' ');
-
-  const userPrompt = JSON.stringify({ full_name: fullName, dossier: dossier });
-
-  try {
-    const res = await fetch(AI_ENDPOINT, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        slug: SLUG,
-        model: MODEL,
-        temperature: 0.8,
-        max_tokens: 400,
-        response_format: 'json_object',
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user',   content: userPrompt },
-        ],
-      }),
-    });
-    if (!res.ok) throw new Error('http_' + res.status);
-    const data = await res.json();
-    const raw = (data && typeof data.content === 'string') ? data.content.trim() : '';
-    if (!raw) throw new Error('empty');
-
-    const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
-    const parsed = JSON.parse(cleaned);
-
-    if (!parsed || typeof parsed !== 'object') throw new Error('bad_obj');
-    const questions = Array.isArray(parsed.questions) ? parsed.questions.map(q => String(q).trim()).filter(Boolean) : [];
     if (questions.length < 3) throw new Error('too_few_questions');
-    const preamble = typeof parsed.preamble === 'string' ? parsed.preamble.trim() : '';
 
+    const preamble = typeof parsed.preamble === 'string' ? parsed.preamble.trim() : '';
     return {
       preamble: preamble || FALLBACK_PREAMBLE,
       questions: questions.slice(0, 3),
@@ -434,18 +529,23 @@ async function generateFollowups(fullName, dossier) {
 }
 
 // ------- AI call: stage 3 — letter itself (with archetype pick) -------
-async function generateLetter(fullName, dossier, questions, answers) {
+async function generateLetter(fullName, dossier, confirm, questions, answers) {
   const qa = questions.map((q, i) => ({ q, a: String(answers[i] || '').slice(0, 400) }));
-
   const allowed = ARCHETYPES.map(a => `- ${a.key}: ${a.name} — ${a.voice}`).join('\n');
 
   const systemPrompt = [
     `You are the scrivener for "Dead Poets' Pen Pal". You draft short, handwritten-style letters.`,
-    `Task: given the recipient's full name, the archive's dossier on the name, and the recipient's answers to three intimate queries, (1) pick the ONE historical letter-writer archetype below whose voice best fits them (use both dossier era-feel AND the answers to decide), then (2) compose a personalized letter in that archetype's voice.`,
-    `The letter MUST feel written TO this specific person: open with a handwritten-style salutation that uses their first name (e.g. "Dear Eleanor —" or "My dear Eleanor,"). Weave in at least two specific details from their ANSWERS (image or phrasing, not verbatim quotes) AND at least one echo from the DOSSIER (era-feel, origin root, or a bearer's territory) so it is clear the letter was shaped by the archive's findings — NOT claiming the user is a famous bearer.`,
+    `Inputs: the recipient's full name, the archive's dossier on them, which they have confirmed as:`,
+    `  "identified" — the public-record portrait was them;`,
+    `  "not_me"     — the portrait was a different person who shares their name;`,
+    `  "name_only"  — no public record was placed, only a reading of the name.`,
+    `Your job: (1) pick the ONE historical letter-writer archetype below whose voice best fits them, using the dossier, the confirm state, and their answers; (2) compose a personalized letter in that archetype's voice.`,
+    `The letter MUST feel written TO this specific person: open with a handwritten-style salutation that uses their first name (e.g. "Dear Eleanor —" or "My dear Eleanor,"). Weave in at least two specific images or phrases from their ANSWERS (not verbatim quotes).`,
+    `If confirm="identified": ALSO weave in one grounded echo from the public-record portrait — the TERRITORY they work in, the ERA they are of, or the TEXTURE of their known work — WITHOUT naming them as a celebrity, WITHOUT flattering, and WITHOUT naming any specific work, award, or private fact. One subtle echo only. Treat them as a peer across time.`,
+    `If confirm="not_me" or "name_only": do NOT reference the public-record portrait at all. Treat the recipient as a private individual. You may subtly echo the era_feel or ink_note of the name itself.`,
     `Length: 3 short paragraphs in the letter body (NOT counting the salutation). 100 to 160 words total in the body. No lists, no headings, no hashtags, no emojis.`,
     `Do NOT include a sign-off or signature in the body (it will be appended separately).`,
-    `Stay in period-appropriate diction for the archetype. No modern slang. No references to AI, apps, websites, the dossier-as-dossier, or the questionnaire.`,
+    `Stay in period-appropriate diction for the archetype. No modern slang. No references to AI, apps, websites, the dossier, or the questionnaire.`,
     `Allowed archetype keys (pick EXACTLY one, exact key spelling):`,
     allowed,
     `Return strict JSON ONLY, schema:`,
@@ -453,7 +553,12 @@ async function generateLetter(fullName, dossier, questions, answers) {
     `"salutation" is just the opening line (e.g. "Dear Eleanor —"). "letter" is the 3 paragraphs of body text, separated by blank lines. No markdown. No code fences. JSON only.`,
   ].join('\n');
 
-  const userPrompt = JSON.stringify({ full_name: fullName, dossier: dossier, follow_ups: qa });
+  const userPrompt = JSON.stringify({
+    full_name: fullName,
+    dossier: dossier,
+    confirm: confirm,
+    follow_ups: qa,
+  });
 
   try {
     const res = await fetch(AI_ENDPOINT, {
@@ -463,7 +568,7 @@ async function generateLetter(fullName, dossier, questions, answers) {
         slug: SLUG,
         model: MODEL,
         temperature: 0.85,
-        max_tokens: 600,
+        max_tokens: 640,
         response_format: 'json_object',
         messages: [
           { role: 'system', content: systemPrompt },
@@ -478,8 +583,8 @@ async function generateLetter(fullName, dossier, questions, answers) {
 
     const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
     const parsed = JSON.parse(cleaned);
-
     if (!parsed || typeof parsed !== 'object') throw new Error('bad_obj');
+
     const key = ARCHETYPE_KEYS.indexOf(parsed.archetype_key) >= 0
       ? parsed.archetype_key
       : ARCHETYPE_KEYS[hash(fullName) % ARCHETYPE_KEYS.length];
@@ -510,7 +615,7 @@ async function runDossierStage() {
   showScreen('loading');
 
   const minLoad = new Promise(r => setTimeout(r, 1100));
-  const dosP = generateDossier(state.name);
+  const dosP = generatePersonDossier(state.name, state.hint);
   const [_, dossier] = await Promise.all([minLoad, dosP]);
 
   state.dossier = dossier;
@@ -523,7 +628,8 @@ async function runFollowupStage() {
   showScreen('loading');
 
   const minLoad = new Promise(r => setTimeout(r, 700));
-  const fuP = generateFollowups(state.name, state.dossier || fallbackDossier(state.name));
+  const dossier = state.dossier || fallbackDossier(state.name);
+  const fuP = generateFollowups(state.name, dossier, state.confirm || 'name_only');
   const [_, { preamble, questions }] = await Promise.all([minLoad, fuP]);
 
   state.questions = questions;
@@ -541,6 +647,7 @@ async function runLetterStage() {
   const letterP = generateLetter(
     state.name,
     state.dossier || fallbackDossier(state.name),
+    state.confirm || 'name_only',
     state.questions,
     state.answers
   );
@@ -571,8 +678,6 @@ function renderResult() {
   });
   el.letterSignature.textContent = archetype.signoff;
 
-  // Render the archive dossier footer under the letter so the lookup is visible
-  // on the result screen too — this is the "receipt" for the personalization.
   renderResultDossierFooter();
 
   el.share.style.display = 'block';
@@ -589,11 +694,20 @@ function renderResultDossierFooter() {
   el.resultDossier.hidden = false;
   el.resultDossierBody.innerHTML = '';
 
-  const first = String(state.name || '').trim().split(/\s+/)[0] || 'friend';
+  // Only include the public-record notes if the user actually confirmed the
+  // portrait. Otherwise show a "name-only" note so the receipt matches reality.
+  const showPortrait = state.confirm === 'identified'
+    && d.identified && !d.name_only && d.portrait;
 
-  const origin = document.createElement('p');
-  origin.innerHTML = `<em>On the name &ldquo;${escapeHtml(first)}&rdquo; —</em> ${escapeHtml(d.origin || '')}`;
-  el.resultDossierBody.appendChild(origin);
+  const head = document.createElement('p');
+  head.innerHTML = showPortrait
+    ? `<em>From the public record &mdash;</em> ${escapeHtml(d.portrait)}`
+    : `<em>No specific public record was placed &mdash;</em> ${escapeHtml(
+        d.portrait && !d.identified
+          ? d.portrait
+          : 'the archive wrote from the name alone, by your consent.'
+      )}`;
+  el.resultDossierBody.appendChild(head);
 
   if (d.era_feel) {
     const era = document.createElement('p');
@@ -601,14 +715,13 @@ function renderResultDossierFooter() {
     el.resultDossierBody.appendChild(era);
   }
 
-  const bearers = Array.isArray(d.bearers) ? d.bearers.filter(Boolean) : [];
-  if (bearers.length) {
+  if (showPortrait && Array.isArray(d.public_notes) && d.public_notes.length) {
     const listWrap = document.createElement('p');
-    listWrap.innerHTML = '<em>Filed beside —</em>';
+    listWrap.innerHTML = '<em>On file &mdash;</em>';
     el.resultDossierBody.appendChild(listWrap);
     const ul = document.createElement('ul');
     ul.className = 'dossier-list compact';
-    bearers.slice(0, 3).forEach(b => {
+    d.public_notes.slice(0, 3).forEach(b => {
       const li = document.createElement('li');
       li.textContent = b;
       ul.appendChild(li);
@@ -627,9 +740,11 @@ function renderResultDossierFooter() {
 function updateShareUrl() {
   try {
     const payload = {
-      v: 3,
+      v: 4,
       n: state.name,
+      hint: state.hint,
       dos: state.dossier || null,
+      conf: state.confirm || 'name_only',
       qs: state.questions,
       as: state.answers,
       k: state.archetypeKey,
@@ -654,13 +769,16 @@ function share() {
 // ------- restart -------
 function restart() {
   state.name = '';
+  state.hint = '';
   state.dossier = null;
+  state.confirm = '';
   state.questions = [];
   state.answers = [];
   state.archetypeKey = '';
   state.salutation = '';
   state.letter = '';
   if (el.nameInput) el.nameInput.value = '';
+  if (el.nameHintInput) el.nameHintInput.value = '';
   if (el.nameError) el.nameError.hidden = true;
   if (el.fuError) el.fuError.hidden = true;
   history.replaceState(null, '', location.pathname + location.search);
@@ -669,7 +787,6 @@ function restart() {
 
 // ------- bootstrap -------
 document.addEventListener('DOMContentLoaded', () => {
-  // Restore from URL fragment, if present.
   const frag = location.hash.startsWith('#l=') ? location.hash.slice(3) : '';
   const restored = frag ? decodeState(frag) : null;
 
@@ -689,6 +806,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     el.nameError.hidden = true;
     state.name = val;
+    state.hint = (el.nameHintInput && el.nameHintInput.value || '').trim();
     await runDossierStage();
   });
 
@@ -698,9 +816,30 @@ document.addEventListener('DOMContentLoaded', () => {
       el.registerName.click();
     }
   });
+  if (el.nameHintInput) {
+    el.nameHintInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        el.registerName.click();
+      }
+    });
+  }
 
-  if (el.dossierContinue) {
-    el.dossierContinue.addEventListener('click', async () => {
+  if (el.confirmYes) {
+    el.confirmYes.addEventListener('click', async () => {
+      state.confirm = 'identified';
+      await runFollowupStage();
+    });
+  }
+  if (el.confirmNo) {
+    el.confirmNo.addEventListener('click', async () => {
+      // "Not me" vs. "name_only" — if the archive never identified anyone,
+      // this button is the only path and means name_only; if it did identify
+      // someone and the user said it's not them, we track that explicitly so
+      // downstream stages skip the portrait.
+      const d = state.dossier;
+      const hadId = d && d.identified && !d.name_only;
+      state.confirm = hadId ? 'not_me' : 'name_only';
       await runFollowupStage();
     });
   }
@@ -723,7 +862,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
   if (restored) {
     state.name = restored.n || '';
+    state.hint = restored.hint || '';
     state.dossier = (restored.dos && typeof restored.dos === 'object') ? restored.dos : null;
+    state.confirm = restored.conf || (restored.v === 4 ? 'name_only' : 'name_only');
     state.questions = Array.isArray(restored.qs) ? restored.qs : [];
     state.answers = Array.isArray(restored.as) ? restored.as : [];
     state.archetypeKey = restored.k || '';

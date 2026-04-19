@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Dead Poets' Pen Pal</title>
   <meta property="og:title" content="Dead Poets' Pen Pal">
-  <meta property="og:description" content="Whisper your name to the archive and receive a personalized handwritten letter from your epistolary twin across history.">
+  <meta property="og:description" content="Give the archive your name. It consults the public record, confirms who it thinks you are, asks a few intimate questions, and sends you a handwritten letter from your epistolary twin across history.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://benlirio.com/dead-poets-pen-pal/">
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -28,9 +28,14 @@
       <section id="intro" class="screen">
         <p class="lede">
           Somewhere in the candle-smoke of the archives, a letter-writer has been waiting
-          on you. Whisper your full name. We will rifle through the registry, read the
-          notes the archive keeps on it, ask you a few intimate questions, and find
-          your epistolary twin.
+          on you. Give your full name — any public name will do. The archivist will
+          consult the public record, pull the drawer on <em>you</em> (not a definition, but
+          what the world has quietly kept on file), confirm we've drawn the right portrait,
+          ask a few intimate questions, and find your epistolary twin.
+        </p>
+        <p class="lede-aside">
+          <em>Public information only. If you're not on the record, the archive will tell you
+          so, and write from the name instead.</em>
         </p>
         <button id="begin" class="ink-button">Begin the correspondence</button>
       </section>
@@ -40,40 +45,54 @@
         <div class="progress">Your full name, please</div>
         <label for="name-input" class="secret-label">
           <em>Sign the register &mdash;</em><br>
-          so the archive knows where to send the reply.
+          full name as the world knows it. The archivist will try to place you
+          in the public record.
         </label>
         <input id="name-input" type="text" maxlength="80"
           placeholder="Eleanor Whitfield" autocomplete="name" spellcheck="false" />
+        <label class="hint-label" for="name-hint-input">
+          <em>A hint, optional &mdash;</em> where you're from, your field,
+          or anything public that helps disambiguate.
+        </label>
+        <input id="name-hint-input" type="text" maxlength="120"
+          placeholder="e.g. the journalist in Dublin; the painter; the researcher at MIT" spellcheck="false" />
         <button id="register-name" class="ink-button">Consult the archive</button>
         <div id="name-error" class="err-msg" hidden></div>
       </section>
 
-      <!-- Dossier screen (visible name-lookup step) -->
+      <!-- Dossier screen (visible public-record lookup on the person) -->
       <section id="dossier" class="screen" hidden>
-        <div class="progress">From the archive's drawer on <span id="dossier-name"></span></div>
+        <div class="progress">The archive's drawer on <span id="dossier-name"></span></div>
 
         <div class="dossier-card">
-          <div class="dossier-stamp" aria-hidden="true">ARCHIVE<br>NOTES</div>
+          <div class="dossier-stamp" aria-hidden="true" id="dossier-stamp">PUBLIC<br>RECORD</div>
 
           <div class="dossier-row">
-            <div class="dossier-label">Origin</div>
-            <p id="dossier-origin" class="dossier-text"></p>
+            <div class="dossier-label" id="dossier-portrait-label">Best guess from public record</div>
+            <p id="dossier-portrait" class="dossier-text"></p>
           </div>
 
-          <div class="dossier-row">
+          <div class="dossier-row" id="dossier-notes-row">
+            <div class="dossier-label">On file</div>
+            <ul id="dossier-notes" class="dossier-list"></ul>
+          </div>
+
+          <div class="dossier-row" id="dossier-era-row">
             <div class="dossier-label">Era &amp; feel</div>
             <p id="dossier-era" class="dossier-text"></p>
-          </div>
-
-          <div class="dossier-row">
-            <div class="dossier-label">Filed beside</div>
-            <ul id="dossier-bearers" class="dossier-list"></ul>
           </div>
 
           <p id="dossier-ink" class="dossier-ink"></p>
         </div>
 
-        <button id="dossier-continue" class="ink-button">Continue &mdash; three intimate queries</button>
+        <div class="confirm-row" id="confirm-row">
+          <p class="confirm-q">Is this you?</p>
+          <div class="confirm-btns">
+            <button id="confirm-yes" class="ink-button">That's me &mdash; continue</button>
+            <button id="confirm-no" class="ink-button-ghost">Not me &mdash; proceed from the name only</button>
+          </div>
+          <p class="confirm-note"><em>The archivist only works from public information. Private details are not looked up and not stored.</em></p>
+        </div>
       </section>
 
       <!-- Follow-ups screen -->
